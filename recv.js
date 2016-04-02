@@ -1,5 +1,6 @@
 var log = document.getElementById("log");
-var plot = document.getElementById("plot").getContext("2d");
+var plot = document.getElementById("plot");
+var plotCtx = plot.getContext("2d");
 
 log.innerText = "foo\n";
 
@@ -45,6 +46,7 @@ function startStreamData() {
 var lastcoarse;
 var lastfine;
 var lastvolt;
+var haveRedraw = false;
 
 function recvData(data) {
     var voltage = data.readUInt16LE(0);
@@ -54,30 +56,37 @@ function recvData(data) {
     lastcoarse = [];
     lastfine = [];
 
-    for (var i = 0; i < data.length - 3; i += 3) {
-        var val = data.readUInt8(i);
-        val = val | (data.readUInt8(i) << 8);
-        val = val | (data.readUInt8(i) << 16);
+    for (var i = 4; i < data.length - 3;) {
+        var val = data.readUInt8(i++);
+        val = val | (data.readUInt8(i++) << 8);
+        val = val | (data.readUInt8(i++) << 16);
         var coarse = val & 0xfff;
         var fine = val >> 12;
         lastcoarse.push(coarse);
         lastfine.push(fine);
     }
-    window.requestAnimationFrame(draw);
+    if (!haveRedraw) {
+        window.requestAnimationFrame(draw);
+        haveRedraw = true;
+    }
 }
 
 function draw(timestamp) {
+    var pixel = plotCtx.createImageData(1, 1);
+    pixel.data[0] = 255;
+    pixel.data[3] = 255;
+
     var xmax = 1024;
     var ymax = 512;
-    var img = plot.createImageData(xmax, ymax);
-    var data = img.data;
+    plot.width = plot.width;
+
     for (var x = 0; x < 1024; x++) {
         var val = lastfine[x] >> 3;
-        var ofs = (x + (ymax-1-val)*xmax) * 4;
-        data[ofs] = 255;
-        data[ofs+3] = 255;
+        var y = ymax - 1 - val;
+        plotCtx.putImageData(pixel, x, y);
     }
-    plot.putImageData(img, 0, 0);
+
+    haveRedraw = false;
 }
 
 var dacForm = document.getElementById("setDac");
