@@ -4,12 +4,38 @@
     <title>Hello World!</title>
   </head>
   <body>
-    <canvas id="plot" width="1024" height="512">
+    <!-- <canvas id="plot" width="1024" height="512"> -->
     </canvas>
-    <form id="setDac">
-      <input id="dac" type="text" />
-      <input type="submit" />
+    <form id="setDac" onsubmit="return false;">
+      <label for="dac">DAC</label> <input id="dac" type="text" />
+      <br />
+
+      <label for="relay">relay</label>
+      <select id="relay">
+        <option value="0">normal</option>
+        <option value="1">short</option>
+        <option value="2">calibrate</option>
+      </select>
+      <br />
+
+      <label for="voltage">voltage</label>
+      <select id="voltage">
+        <option value="0">none</option>
+        <option value="2">3V</option>
+        <option value="1">5V</option>
+      </select>
+      <br />
+
+      <input type="checkbox" id="current1" value="1" /><label for="current1">3uA</label><br />
+      <input type="checkbox" id="current2" value="2" /><label for="current2">300uA</label><br />
+      <input type="checkbox" id="current3" value="4" /><label for="current3">30mA</label><br />
+      <input type="checkbox" id="current4" value="8" /><label for="current4">30mA</label><br />
     </form>
+    <p>
+      coarse: <span id="coarseval"></span> <br />
+      fine: <span id="fineval"></span><br />
+      voltage: <span id="voltageval"></span>
+    </p>
     <pre id="log"/>
   </body>
   <script src="recv.js"></script>
