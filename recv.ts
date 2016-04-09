@@ -76,9 +76,20 @@ function setCurrent(val: number, cb?: ()=>void) {
 }
 
 async function setState(state: stateInfo) {
+    let curstate = lastblock.state;
+
     let all: Promise<void>[] = [];
-    if (state.relay != lastblock.state.relay) {
+    if (state.relay != curstate.relay) {
         all.push(new Promise<void>(resolve => setRelay(state.relay, resolve)));
+    }
+    if (state.dac != curstate.dac) {
+        all.push(new Promise<void>(resolve => setDac(state.dac, resolve)));
+    }
+    if (state.current != curstate.current) {
+        all.push(new Promise<void>(resolve => setCurrent(state.current, resolve)));
+    }
+    if (state.voltage != curstate.voltage) {
+        all.push(new Promise<void>(resolve => setVoltage(state.voltage, resolve)));
     }
     return Promise.all(all);
 }
@@ -142,7 +153,7 @@ var haveRedraw = false;
 
 function recvData(data: Buffer) {
     var voltage = data.readUInt16LE(0);
-    var state = data.readUInt32LE(1);
+    var state = data.readUInt32LE(2);
 
     var block: blockInfo = {
         state: {
@@ -195,10 +206,15 @@ async function configAndWait(newState: stateInfo) {
     await setState(newState);
 
     let block = lastblock;
-    while (block.state != newState) {
+
+    while (block.state.dac !== newState.dac ||
+           block.state.relay !== newState.relay ||
+           block.state.voltage !== newState.voltage ||
+           block.state.current !== newState.current) {
         block = await waitForBlock();
     }
-    return block;
+    // let's take the next one
+    return waitForBlock();
 }
 
 interface cmCalibration {
@@ -216,17 +232,17 @@ async function calibrate() {
     // calibrate offset
     let dacRange = [0, 0xfff];
     function nextDac(direction: "up" | "down") {
-        let prev = mean(dacRange);
+        let prev = ~~mean(dacRange); // ~~ truncates to integer
         if (direction == "up") {
             dacRange = [prev, dacRange[1]];
         } else {
             dacRange = [dacRange[0], prev];
         }
-        return mean(dacRange);
+        return ~~mean(dacRange);
     }
 
-    let dac = 0;
-    let block = await configAndWait({dac: dac, relay: calibrateRelay.CALIBRATE, voltage: calibrateVoltage.OFF, current: calibrateCurrent.A300u});
+    let dac = ~~mean(dacRange);
+    let block = await configAndWait({dac: dac, relay: calibrateRelay.CALIBRATE, voltage: calibrateVoltage.OFF, current: calibrateCurrent.A30m});
     let voltageOff = block.voltage;
     let coarseOff = mean(block.coarse);
     let fineOff = mean(block.fine);
@@ -235,7 +251,7 @@ async function calibrate() {
     log("coarse offset", coarseOff);
 
     while (fineOff < 20 || fineOff > 40) {
-        if (fineOff < 20)
+        if (fineOff > 40)
             dac = nextDac("up");
         else
             dac = nextDac("down");
@@ -243,21 +259,22 @@ async function calibrate() {
         log("fine offset", fineOff, "out of range, adjusting dac to", dac);
 
         block = await configAndWait({dac: dac, relay: calibrateRelay.CALIBRATE, voltage: calibrateVoltage.OFF, current: calibrateCurrent.A300u});
-        fineOff = mean(block.coarse);
+        fineOff = mean(block.fine);
     }
     log("fine offset", fineOff);
 
     // determine CMRR
     block = await configAndWait({dac: dac, relay: calibrateRelay.CALIBRATE, voltage: calibrateVoltage.V3, current: calibrateCurrent.OFF});
+    let voltageGain = 3.0 / (block.voltage - voltageOff);
     let fineOff3V = mean(block.fine) - fineOff;
     let fineCmrrGain = fineOff3V / 3.0;
 
-    log("cmrr offset at 3V", fineOff3V, "cmrr gain", fineCmrrGain);
+    log("cmrr offset at 3V", fineOff3V, "cmrr gain", fineCmrrGain, "voltage gain", voltageGain);
 
     // fine range gain
     block = await configAndWait({dac: dac, relay: calibrateRelay.CALIBRATE, voltage: calibrateVoltage.V3, current: calibrateCurrent.A300u});
-    let voltage300uA = block.voltage - voltageOff;
-    let current300uA = voltage300uA/(3*470e3);
+    let voltage300uA = (block.voltage - voltageOff) * voltageGain;
+    let current300uA = voltage300uA / (3*470e3);
     let fineVal300uA = mean(block.fine) - fineCmrrGain * voltage300uA;
     let fineGain = current300uA / fineVal300uA;
 
@@ -320,3 +337,5 @@ document.getElementById("current1").onchange = function() {
 document.getElementById("current2").onchange = document.getElementById("current1").onchange;
 document.getElementById("current3").onchange = document.getElementById("current1").onchange;
 document.getElementById("current4").onchange = document.getElementById("current1").onchange;
+
+document.getElementById("calibrate").onclick = calibrate;
