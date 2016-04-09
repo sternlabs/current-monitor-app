@@ -5,9 +5,8 @@
         "noImplicitAny": true,
         "sourceMap": true
     },
-    "exclude": [
-        "typings/main.d.ts",
-        "typings/main",
-        "node_modules"
+    "files": [
+        "typings/browser.d.ts",
+        "recv.ts"
     ]
 }
