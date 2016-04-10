@@ -150,7 +150,7 @@ class CmUsb extends EventEmitter {
 }
 
 
-interface cmCalibration {
+class cmCalibration {
     dac: number;
     voltageOff: number;
     voltageGain: number;
@@ -159,10 +159,22 @@ interface cmCalibration {
     fineOff: number;
     fineGain: number;
     fineCmrrGain: number;
+
+    constructor() {
+        this.dac = 0;
+        this.voltageOff = 0;
+        this.voltageGain = 1;
+        this.coarseOff = 0;
+        this.coarseGain = 1;
+        this.fineOff = 0;
+        this.fineGain = 1;
+        this.fineCmrrGain = 0;
+    }
 }
 
 class Calibrate {
     dev: CmUsb;
+    calibration: cmCalibration = new cmCalibration();
 
     constructor(dev: CmUsb) {
         this.dev = dev;
@@ -179,15 +191,17 @@ class Calibrate {
 
         do {
             block = await this.waitForBlock();
-        } while (block.state.dac !== newState.dac ||
-                 block.state.relay !== newState.relay ||
-                 block.state.voltage !== newState.voltage ||
-                 block.state.current !== newState.current) {
+        } while (newState.dac != null && block.state.dac !== newState.dac ||
+                 newState.relay != null && block.state.relay !== newState.relay ||
+                 newState.voltage != null && block.state.voltage !== newState.voltage ||
+                 newState.current != null && block.state.current !== newState.current) {
         }
         return block;
     }
 
     async calibrate(): Promise<void> {
+        let newCalib = new cmCalibration();
+
         // calibrate offset
         let dacRange = [0, 0xfff];
         function nextDac(direction: "up" | "down") {
@@ -202,15 +216,15 @@ class Calibrate {
 
         let dac = ~~mean(dacRange);
         let block = await this.configAndWait({dac: dac, relay: calibrateRelay.CALIBRATE, voltage: calibrateVoltage.OFF, current: calibrateCurrent.A30m});
-        let voltageOff = block.voltage;
-        let coarseOff = mean(block.coarse);
-        let fineOff = mean(block.fine);
+        newCalib.voltageOff = block.voltage;
+        newCalib.coarseOff = mean(block.coarse);
+        newCalib.fineOff = mean(block.fine);
 
-        log("voltage offset", voltageOff);
-        log("coarse offset", coarseOff);
+        log("voltage offset", newCalib.voltageOff);
+        log("coarse offset", newCalib.coarseOff);
 
-        while (fineOff < 20 || fineOff > 40) {
-            if (fineOff > 40)
+        while (newCalib.fineOff < 20 || newCalib.fineOff > 40) {
+            if (newCalib.fineOff > 40)
                 dac = nextDac("up");
             else
                 dac = nextDac("down");
@@ -220,29 +234,84 @@ class Calibrate {
                 return this.calibrate();
             }
 
-            log("fine offset", fineOff, "out of range, adjusting dac to", dac);
+            log("fine offset", newCalib.fineOff, "out of range, adjusting dac to", dac);
 
-            block = await this.configAndWait({dac: dac, relay: calibrateRelay.CALIBRATE, voltage: calibrateVoltage.OFF, current: calibrateCurrent.A300u});
-            fineOff = mean(block.fine);
+            block = await this.configAndWait({dac: dac});
+            newCalib.fineOff = mean(block.fine);
         }
-        log("fine offset", fineOff);
+        newCalib.dac = dac;
+        log("fine offset", newCalib.fineOff);
 
         // determine CMRR
-        block = await this.configAndWait({dac: dac, relay: calibrateRelay.CALIBRATE, voltage: calibrateVoltage.V3, current: calibrateCurrent.OFF});
-        let voltageGain = 3.0 / (block.voltage - voltageOff);
-        let fineOff3V = mean(block.fine) - fineOff;
-        let fineCmrrGain = fineOff3V / 3.0;
+        block = await this.configAndWait({voltage: calibrateVoltage.V3, current: calibrateCurrent.OFF});
+        newCalib.voltageGain = 3.0 / (block.voltage - newCalib.voltageOff);
+        let fineOff3V = mean(block.fine) - newCalib.fineOff;
+        newCalib.fineCmrrGain = fineOff3V / 3.0;
 
-        log("cmrr offset at 3V", fineOff3V, "cmrr gain", fineCmrrGain, "voltage gain", voltageGain);
+        log("cmrr offset at 3V", fineOff3V, "cmrr gain", newCalib.fineCmrrGain, "voltage gain", newCalib.voltageGain);
 
         // fine range gain
-        block = await this.configAndWait({dac: dac, relay: calibrateRelay.CALIBRATE, voltage: calibrateVoltage.V3, current: calibrateCurrent.A300u});
-        let voltage300uA = (block.voltage - voltageOff) * voltageGain;
+        block = await this.configAndWait({voltage: calibrateVoltage.V3, current: calibrateCurrent.A300u});
+        let voltage300uA = this.translateVoltage(block.voltage);
         let current300uA = voltage300uA / (3*470e3);
-        let fineVal300uA = mean(block.fine) - fineCmrrGain * voltage300uA;
-        let fineGain = current300uA / fineVal300uA;
+        let fineVal300uA = mean(block.fine) - newCalib.fineOff - newCalib.fineCmrrGain * voltage300uA;
+        newCalib.fineGain = current300uA / fineVal300uA;
 
-        log("fine gain", fineGain, "at V =", voltage300uA, "I =", current300uA);
+        log("fine gain", newCalib.fineGain, "at V =", voltage300uA, "I =", current300uA);
+
+        // coarse range gain
+        block = await this.configAndWait({voltage: calibrateVoltage.V5, current: calibrateCurrent.A30m});
+        let voltage5V30m = this.translateVoltage(block.voltage);
+        let current30m = voltage5V30m / 150.0;
+        let coarseVal30m = mean(block.coarse) - newCalib.coarseOff;
+        newCalib.coarseGain = current30m / coarseVal30m;
+
+        log("coarse gain", newCalib.coarseGain, "at V =", voltage5V30m, "I =", current30m);
+
+        this.calibration = newCalib;
+    }
+
+    translateVoltage(voltage: number): number {
+        return voltage - this.calibration.voltageOff * this.calibration.voltageGain;
+    }
+
+    translateCoarse(voltage: number, coarse: number | number[]): number | number[] {
+        return this.translateAry(voltage, coarse, (ary: number[]) => {
+            var tvals: number[];
+            for (let v of ary) {
+                tvals.push((v - this.calibration.coarseOff) * this.calibration.coarseGain);
+            }
+            return tvals;
+        })
+    }
+
+    translateFine(voltage: number, fine: number | number[]): number | number[] {
+        return this.translateAry(voltage, fine, (ary: number[]) => {
+            var tvals: number[];
+            for (let v of ary) {
+                tvals.push((v - this.calibration.fineOff) * this.calibration.fineGain - voltage * this.calibration.fineCmrrGain);
+            }
+            return tvals;
+        })
+    }
+
+    translateAry(voltage: number, vals_: number | number[], f: (v: number[]) => number[]): number | number[] {
+        let tvoltage = voltage - this.calibration.voltageOff;
+
+        let vals: number[];
+        if (vals_ instanceof Array) {
+            vals = vals_;
+        } else {
+            vals = [vals_];
+        }
+
+        let tvals = f(vals);
+
+        if (vals_ instanceof Array) {
+            return tvals;
+        } else {
+            return tvals[0];
+        }
     }
 }
 
