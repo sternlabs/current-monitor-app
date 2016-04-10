@@ -63,6 +63,8 @@ class CmUsb extends EventEmitter {
 
     lastblock: blockInfo;
 
+    calibrate: Calibrate;
+
     constructor() {
         super()
 
@@ -75,6 +77,8 @@ class CmUsb extends EventEmitter {
 
         this.ep.on("data", (data: Buffer) => this.recvData(data));
         this.ep.on("error", function(error: any) {throw error;});
+
+        this.calibrate = new Calibrate(this);
     }
 
     async init() {
@@ -229,7 +233,8 @@ class Calibrate {
             else
                 dac = nextDac("down");
 
-            if (dacRange[0] == dacRange[1]) {
+            if (dacRange[0] == dacRange[1] ||
+                dacRange[0] + 1 == dacRange[1]) {
                 log("error during dac calibration, retrying");
                 return this.calibrate();
             }
@@ -244,24 +249,26 @@ class Calibrate {
 
         // determine CMRR
         block = await this.configAndWait({voltage: calibrateVoltage.V3, current: calibrateCurrent.OFF});
-        newCalib.voltageGain = 3.0 / (block.voltage - newCalib.voltageOff);
+        let voltage3Vraw = block.voltage - newCalib.voltageOff;
+        newCalib.voltageGain = 3.0 / voltage3Vraw;
         let fineOff3V = mean(block.fine) - newCalib.fineOff;
-        newCalib.fineCmrrGain = fineOff3V / 3.0;
+        newCalib.fineCmrrGain = fineOff3V / voltage3Vraw;
 
         log("cmrr offset at 3V", fineOff3V, "cmrr gain", newCalib.fineCmrrGain, "voltage gain", newCalib.voltageGain);
 
         // fine range gain
         block = await this.configAndWait({voltage: calibrateVoltage.V3, current: calibrateCurrent.A300u});
-        let voltage300uA = this.translateVoltage(block.voltage);
-        let current300uA = voltage300uA / (3*470e3);
-        let fineVal300uA = mean(block.fine) - newCalib.fineOff - newCalib.fineCmrrGain * voltage300uA;
+        let voltage300uAraw = block.voltage - newCalib.voltageOff;
+        let voltage300uA = voltage300uAraw * newCalib.voltageGain;
+        let current300uA = voltage300uA / 15e3;
+        let fineVal300uA = mean(block.fine) - newCalib.fineOff - newCalib.fineCmrrGain * voltage300uAraw;
         newCalib.fineGain = current300uA / fineVal300uA;
 
         log("fine gain", newCalib.fineGain, "at V =", voltage300uA, "I =", current300uA);
 
         // coarse range gain
         block = await this.configAndWait({voltage: calibrateVoltage.V5, current: calibrateCurrent.A30m});
-        let voltage5V30m = this.translateVoltage(block.voltage);
+        let voltage5V30m = (block.voltage - newCalib.voltageOff) * newCalib.voltageGain;
         let current30m = voltage5V30m / 150.0;
         let coarseVal30m = mean(block.coarse) - newCalib.coarseOff;
         newCalib.coarseGain = current30m / coarseVal30m;
@@ -272,46 +279,29 @@ class Calibrate {
     }
 
     translateVoltage(voltage: number): number {
-        return voltage - this.calibration.voltageOff * this.calibration.voltageGain;
+        return (voltage - this.calibration.voltageOff) * this.calibration.voltageGain;
     }
 
-    translateCoarse(voltage: number, coarse: number | number[]): number | number[] {
-        return this.translateAry(voltage, coarse, (ary: number[]) => {
-            var tvals: number[];
-            for (let v of ary) {
-                tvals.push((v - this.calibration.coarseOff) * this.calibration.coarseGain);
-            }
-            return tvals;
+    translateCoarse(voltage: number, coarse: number[]): number[] {
+        return this.translateAry(voltage, coarse, (voltage: number, val: number) => {
+            return (val - this.calibration.coarseOff) * this.calibration.coarseGain;
         })
     }
 
-    translateFine(voltage: number, fine: number | number[]): number | number[] {
-        return this.translateAry(voltage, fine, (ary: number[]) => {
-            var tvals: number[];
-            for (let v of ary) {
-                tvals.push((v - this.calibration.fineOff) * this.calibration.fineGain - voltage * this.calibration.fineCmrrGain);
-            }
-            return tvals;
+    translateFine(voltage: number, fine: number[]): number[] {
+        return this.translateAry(voltage, fine, (voltage: number, val: number) => {
+            return (val - this.calibration.fineOff - voltage * this.calibration.fineCmrrGain) * this.calibration.fineGain;
         })
     }
 
-    translateAry(voltage: number, vals_: number | number[], f: (v: number[]) => number[]): number | number[] {
+    translateAry(voltage: number, vals: number[], f: (voltage: number, val: number) => number): number[] {
         let tvoltage = voltage - this.calibration.voltageOff;
 
-        let vals: number[];
-        if (vals_ instanceof Array) {
-            vals = vals_;
-        } else {
-            vals = [vals_];
+        let tvals = vals.slice(0);
+        for (let i in tvals) {
+            tvals[i] = f(tvoltage, tvals[i]);
         }
-
-        let tvals = f(vals);
-
-        if (vals_ instanceof Array) {
-            return tvals;
-        } else {
-            return tvals[0];
-        }
+        return tvals;
     }
 }
 
@@ -350,13 +340,29 @@ class Draw {
         //     plotCtx.putImageData(pixel, x, y);
         // }
 
-        var coarse = <HTMLSpanElement>document.getElementById("coarseval");
-        var fine = <HTMLSpanElement>document.getElementById("fineval");
-        var voltage = <HTMLSpanElement>document.getElementById("voltageval");
+        var coarseEl = <HTMLSpanElement>document.getElementById("coarseval");
+        var fineEl = <HTMLSpanElement>document.getElementById("fineval");
+        var voltageValEl = <HTMLSpanElement>document.getElementById("voltageval");
+        var voltageEl = <HTMLSpanElement>document.getElementById("voltage");
+        var currentEl = <HTMLSpanElement>document.getElementById("current");
 
-        coarse.textContent = mean(this.lastblock.coarse).toString();
-        fine.textContent = mean(this.lastblock.fine).toString();
-        voltage.textContent = this.lastblock.voltage.toString();
+        let coarse = mean(this.lastblock.coarse);
+        let fine = mean(this.lastblock.fine);
+        let voltage = this.lastblock.voltage;
+
+        coarseEl.textContent = coarse.toFixed(0);
+        fineEl.textContent = fine.toFixed(0);
+        voltageValEl.textContent = voltage.toFixed(0);
+
+        voltageEl.textContent = this.dev.calibrate.translateVoltage(voltage).toFixed(2);
+
+        let current: number;
+        if (fine > 4075) {
+            current = this.dev.calibrate.translateCoarse(voltage, [coarse])[0];
+        } else {
+            current = this.dev.calibrate.translateFine(voltage, [fine])[0];
+        }
+        currentEl.textContent = current.toPrecision(4);
 
         this.haveRedraw = false;
     }
@@ -374,9 +380,9 @@ class Ui {
 
         this.dev.on('state', this.onState.bind(this));
 
-        this.dac = <HTMLInputElement>document.getElementById("dac");
-        this.relay = <HTMLSelectElement>document.getElementById("relay");
-        this.voltage = <HTMLSelectElement>document.getElementById("voltage");
+        this.dac = <HTMLInputElement>document.getElementById("cal-dac");
+        this.relay = <HTMLSelectElement>document.getElementById("cal-relay");
+        this.voltage = <HTMLSelectElement>document.getElementById("cal-voltage");
 
         this.dac.onchange = () => {
             dev.setState({dac: +this.dac.value});
@@ -386,13 +392,12 @@ class Ui {
         this.relay.onchange = () => this.dev.setState({relay: +this.relay.value});
         this.voltage.onchange = () => this.dev.setState({voltage: +this.voltage.value});
         for (let v = 1; v <= 4; ++v) {
-            this.current[v] = <HTMLInputElement>document.getElementById("current"+v);
+            this.current[v] = <HTMLInputElement>document.getElementById("cal-current"+v);
             this.current[v].onchange = this.setCurrent.bind(this);
         }
 
         document.getElementById("calibrate").onclick = () => {
-            let calib = new Calibrate(this.dev);
-            calib.calibrate();
+            dev.calibrate.calibrate();
         }
     }
 
