@@ -108,6 +108,7 @@ class CmUsb extends EventEmitter {
         let all: Promise<Buffer>[] = [];
         if (state.relay != null && state.relay != curstate.relay) {
             all.push(this.request(CM_REQ.SET_RELAY, state.relay));
+            all.push(new Promise(resolve => setTimeout(resolve, 50)));
         }
         if (state.dac != null && state.dac != curstate.dac) {
             all.push(this.request(CM_REQ.SET_DAC, state.dac));
@@ -200,7 +201,7 @@ class Calibrate {
                  newState.voltage != null && block.state.voltage !== newState.voltage ||
                  newState.current != null && block.state.current !== newState.current) {
         }
-        return block;
+        return await this.waitForBlock();
     }
 
     async calibrate(): Promise<void> {
@@ -228,10 +229,15 @@ class Calibrate {
         log("coarse offset", newCalib.coarseOff);
 
         while (newCalib.fineOff < 20 || newCalib.fineOff > 40) {
-            if (newCalib.fineOff > 40)
+            if (newCalib.fineOff > 40) {
                 dac = nextDac("up");
-            else
+            } else {
                 dac = nextDac("down");
+                // Any time we saturate the amp on the negative side,
+                // we need to saturate it on the positive side to establish
+                // a consistent offset hysteresis.
+                await this.configAndWait({dac: dac, voltage: calibrateVoltage.V5});
+            }
 
             if (dacRange[0] == dacRange[1] ||
                 dacRange[0] + 1 == dacRange[1]) {
@@ -241,11 +247,30 @@ class Calibrate {
 
             log("fine offset", newCalib.fineOff, "out of range, adjusting dac to", dac);
 
-            block = await this.configAndWait({dac: dac});
+            block = await this.configAndWait({dac: dac, voltage: calibrateVoltage.OFF});
             newCalib.fineOff = mean(block.fine);
         }
         newCalib.dac = dac;
-        log("fine offset", newCalib.fineOff);
+        // long integrate
+        let coarsemeans: number[] = []
+        let finemeans: number[] = [];
+        for (let i = 0; i < 10; ++i) {
+            coarsemeans.push(mean(block.coarse));
+            finemeans.push(mean(block.fine));
+            block = await this.waitForBlock();
+        }
+        do {
+            coarsemeans.push(mean(block.coarse));
+            finemeans.push(mean(block.fine));
+            block = await this.waitForBlock();
+        } while (Math.abs(mean(finemeans.concat([mean(block.fine)]))/mean(finemeans)-1) > 0.0001);
+
+        newCalib.fineOff = mean(finemeans);
+        newCalib.coarseOff = mean(coarsemeans);
+
+        log("averaging", finemeans.length, "blocks", finemeans);
+        log("averaged coarse offset", newCalib.coarseOff);
+        log("averaged fine offset", newCalib.fineOff);
 
         // determine CMRR
         block = await this.configAndWait({voltage: calibrateVoltage.V3, current: calibrateCurrent.OFF});
