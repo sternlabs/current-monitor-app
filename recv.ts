@@ -116,7 +116,7 @@ class Display {
             // this.scene.add(this.data);
         }
         for (let idx = 0; idx < num; idx++) {
-            geo.vertices[idx] = new THREE.Vector3(idx/num*2 - 1, values[idx], 0.0);
+            geo.vertices[idx] = new THREE.Vector3(idx/(num-1)*2 - 1, values[idx], 0.0);
         }
         for (let idx = num; idx < geo.vertices.length; idx++) {
             geo.vertices[idx].x = 10;
@@ -265,11 +265,26 @@ async function main() {
     await d.setup();
 
     let sig: number[] = [];
-    for (let i = 0; i < 10000; i += 100.0) {
-        sig.push((Math.sin(i/1000.0)+1)/100.0);
+    for (let i = 0; i < 10000; i += 4.0) {
+        sig.push((Math.sin(i/1000.0)+1)/10000.0);
     }
-    d.drawData(sig);
-    d.render();
+    // d.drawData(sig);
+    // d.render();
+
+    let haveRedraw = false;
+    dev.on('block', (block: blockInfo) => {
+        if (haveRedraw)
+            return;
+
+        let fine = dev.calibrate.translateFine(block.voltage, block.fine);
+        d.drawData(sig);
+        d.drawData(fine);
+        haveRedraw = true;
+        window.requestAnimationFrame(() => {
+            haveRedraw = false;
+            d.render();
+        });
+    });
 }
 
 main();
