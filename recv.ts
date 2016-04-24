@@ -110,6 +110,7 @@ class Display {
         let geo = <THREE.Geometry>(this.data.geometry);
         if (num < geo.vertices.length) {
             geo = new THREE.Geometry();
+            this.data.geometry.dispose();
             this.data.geometry = geo;
             // this.scene.remove(this.data);
             // this.data = new THREE.LineSegments(geo, <THREE.ShaderMaterial>(this.data.material));
