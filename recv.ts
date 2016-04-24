@@ -1,4 +1,4 @@
-import {CmUsb, blockInfo, stateInfo} from "./device";
+import {CmUsb, blockInfo, rawBlockInfo, stateInfo} from "./device";
 import {mean} from "./util";
 
 function log(...vals: any[]) {
@@ -149,44 +149,11 @@ class Draw {
     }
 
     draw(timestamp: number) {
-        // var pixel = plotCtx.createImageData(1, 1);
-        // pixel.data[0] = 255;
-        // pixel.data[3] = 255;
-
-        // var xmax = 1024;
-        // var ymax = 512;
-        // plot.width = plot.width;
-
-        // for (var x = 0; x < 1024; x++) {
-        //     var val = lastfine[x] >> 3;
-        //     var y = ymax - 1 - val;
-        //     plotCtx.putImageData(pixel, x, y);
-        // }
-
-        var coarseEl = <HTMLSpanElement>document.getElementById("coarseval");
-        var fineEl = <HTMLSpanElement>document.getElementById("fineval");
-        var voltageValEl = <HTMLSpanElement>document.getElementById("voltageval");
         var voltageEl = <HTMLSpanElement>document.getElementById("voltage");
         var currentEl = <HTMLSpanElement>document.getElementById("current");
 
-        let coarse = mean(this.lastblock.coarse);
-        let fine = mean(this.lastblock.fine);
-        let voltage = this.lastblock.voltage;
-
-        coarseEl.textContent = coarse.toFixed(0);
-        fineEl.textContent = fine.toFixed(0);
-        voltageValEl.textContent = voltage.toFixed(0);
-
-        voltageEl.textContent = this.dev.calibrate.translateVoltage(voltage).toFixed(2);
-
-        let current: number;
-        if (fine > 4075) {
-            current = this.dev.calibrate.translateCoarse(voltage, [coarse])[0];
-        } else {
-            current = this.dev.calibrate.translateFine(voltage, [fine])[0];
-        }
-        currentEl.textContent = current.toPrecision(4);
-
+        voltageEl.textContent = this.lastblock.voltage.toFixed(2);
+        currentEl.textContent = mean(this.lastblock.current).toPrecision(4);
         this.haveRedraw = false;
     }
 }
@@ -276,9 +243,8 @@ async function main() {
         if (haveRedraw)
             return;
 
-        let fine = dev.calibrate.translateFine(block.voltage, block.fine);
         d.drawData(sig);
-        d.drawData(fine);
+        d.drawData(block.current);
         haveRedraw = true;
         window.requestAnimationFrame(() => {
             haveRedraw = false;

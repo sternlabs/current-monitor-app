@@ -37,11 +37,16 @@ export interface stateInfo {
     current?: calibrateCurrent;
 }
 
-export interface blockInfo {
+export interface rawBlockInfo {
     state: stateInfo;
     voltage: number;
     coarse: number[];
     fine: number[];
+}
+
+export interface blockInfo {
+    voltage: number;
+    current: number[];
 }
 
 
@@ -51,7 +56,7 @@ export class CmUsb extends EventEmitter {
     ep: any;
     blocksize: number;
 
-    lastblock: blockInfo;
+    lastblock: rawBlockInfo;
 
     calibrate: Calibrate;
 
@@ -117,7 +122,7 @@ export class CmUsb extends EventEmitter {
         var voltage = data.readUInt16LE(0);
         var state = data.readUInt32LE(2);
 
-        var block: blockInfo = {
+        var block: rawBlockInfo = {
             state: {
                 dac: state & 0xfff,
                 relay: (state >> 12) & 3,
@@ -140,7 +145,10 @@ export class CmUsb extends EventEmitter {
         }
 
         this.lastblock = block;
-        this.emit("block", block);
+        this.emit("rawblock", block);
+
+        let convBlock = this.calibrate.convert(block);
+        this.emit('block', convBlock);
     }
 }
 
@@ -176,13 +184,13 @@ class Calibrate {
     }
 
     async waitForBlock() {
-        return new Promise<blockInfo>(resolve => this.dev.once('block', resolve));
+        return new Promise<rawBlockInfo>(resolve => this.dev.once('rawblock', resolve));
     }
 
     async configAndWait(newState: stateInfo) {
         await this.dev.setState(newState);
 
-        let block: blockInfo;
+        let block: rawBlockInfo;
 
         do {
             block = await this.waitForBlock();
@@ -293,29 +301,20 @@ class Calibrate {
         this.calibration = newCalib;
     }
 
-    translateVoltage(voltage: number): number {
-        return (voltage - this.calibration.voltageOff) * this.calibration.voltageGain;
-    }
+    convert(raw: rawBlockInfo): blockInfo {
+        let correctedVoltage = raw.voltage - this.calibration.voltageOff;
+        let tVoltage = correctedVoltage * this.calibration.voltageGain;
+        let tCurrent: number[] = [];
 
-    translateCoarse(voltage: number, coarse: number[]): number[] {
-        return this.translateAry(voltage, coarse, (voltage: number, val: number) => {
-            return (val - this.calibration.coarseOff) * this.calibration.coarseGain;
-        })
-    }
+        for (let i = 0; i < raw.fine.length; i++) {
+            let current = (raw.fine[i] - this.calibration.fineOff - correctedVoltage * this.calibration.fineCmrrGain) * this.calibration.fineGain;
 
-    translateFine(voltage: number, fine: number[]): number[] {
-        return this.translateAry(voltage, fine, (voltage: number, val: number) => {
-            return (val - this.calibration.fineOff - voltage * this.calibration.fineCmrrGain) * this.calibration.fineGain;
-        })
-    }
-
-    translateAry(voltage: number, vals: number[], f: (voltage: number, val: number) => number): number[] {
-        let tvoltage = voltage - this.calibration.voltageOff;
-
-        let tvals = vals.slice(0);
-        for (let i in tvals) {
-            tvals[i] = f(tvoltage, tvals[i]);
+            if (raw.fine[i] > 4075) {
+                current = (raw.coarse[i] - this.calibration.coarseOff) * this.calibration.coarseGain;
+            }
+            tCurrent.push(current);
         }
-        return tvals;
+
+        return {voltage: tVoltage, current: tCurrent}
     }
 }
