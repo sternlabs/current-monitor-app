@@ -129,7 +129,7 @@ export class CmUsb extends EventEmitter {
             fine: [],
         };
 
-        for (var i = 6; i < data.length - 3;) {
+        for (var i = 6; i <= data.length - 3;) {
             var val = data.readUInt8(i++);
             val = val | (data.readUInt8(i++) << 8);
             val = val | (data.readUInt8(i++) << 16);
