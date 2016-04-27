@@ -1,5 +1,6 @@
 import {CmUsb, blockInfo, rawBlockInfo, stateInfo} from "./device";
 import {mean} from "./util";
+import {SampleBuffer} from "./buffer";
 
 function log(...vals: any[]) {
     var logelem = document.getElementById("log");
@@ -105,7 +106,7 @@ class Display {
         this.scene.add(this.data);
     }
 
-    drawData(values: number[]) {
+    drawData(values: ArrayLike<number>) {
         let num = values.length;
         let geo = <THREE.Geometry>(this.data.geometry);
         if (num < geo.vertices.length) {
@@ -232,20 +233,28 @@ async function main() {
     let d = new Display(document.getElementById("glbox"));
     await d.setup();
 
-    let sig: number[] = [];
-    for (let i = 0; i < 10000; i += 4.0) {
-        sig.push((Math.sin(i/1000.0)+1)/10000.0);
-    }
-    // d.drawData(sig);
-    // d.render();
+    let samples = new SampleBuffer(240000);
 
     let haveRedraw = false;
     dev.on('block', (block: blockInfo) => {
         if (haveRedraw)
             return;
 
-        d.drawData(sig);
-        d.drawData(block.current);
+        samples.store(block.current);
+
+        let s = samples.getByTime(-1, 1);
+
+        let target = 2000;
+        let reduced: number[] = [];
+        let ratio = s.length / target;
+        if (ratio < 1) {
+            ratio = 1;
+        }
+        for (let pos = 0; Math.ceil(pos) < s.length; pos += ratio) {
+            reduced.push(mean(s.subarray(pos, (pos+ratio)|0)));
+        }
+
+        d.drawData(reduced);
         haveRedraw = true;
         window.requestAnimationFrame(() => {
             haveRedraw = false;

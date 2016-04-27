@@ -46,7 +46,7 @@ export interface rawBlockInfo {
 
 export interface blockInfo {
     voltage: number;
-    current: number[];
+    current: Float32Array;
 }
 
 
@@ -304,7 +304,7 @@ class Calibrate {
     convert(raw: rawBlockInfo): blockInfo {
         let correctedVoltage = raw.voltage - this.calibration.voltageOff;
         let tVoltage = correctedVoltage * this.calibration.voltageGain;
-        let tCurrent: number[] = [];
+        let tCurrent = new Float32Array(raw.fine.length);
 
         for (let i = 0; i < raw.fine.length; i++) {
             let current = (raw.fine[i] - this.calibration.fineOff - correctedVoltage * this.calibration.fineCmrrGain) * this.calibration.fineGain;
@@ -312,7 +312,7 @@ class Calibrate {
             if (raw.fine[i] > 4075) {
                 current = (raw.coarse[i] - this.calibration.coarseOff) * this.calibration.coarseGain;
             }
-            tCurrent.push(current);
+            tCurrent[i] = current;
         }
 
         return {voltage: tVoltage, current: tCurrent}
